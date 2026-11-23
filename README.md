@@ -16,8 +16,11 @@
 │   └── vite.config.ts        dev server 配置（open: false）
 ├── backend/                  FastAPI（Python） 后端
 │   ├── app/routers/resource.py  通用查询/导出/登记/动作接口
+│   ├── app/routers/window_engine.py  滑动窗口事件时间计算接口（/api/window-engine）
 │   ├── app/services/<key>.py    每个模块独立领域逻辑
+│   ├── app/services/window_engine.py  事件时间计算引擎（落窗/幂等接入/补算结算/对账）
 │   ├── app/services/base.py     共享服务骨架
+│   ├── tests/                引擎单元测试（python -m unittest discover -s tests）
 │   └── app/store.py          内存数据仓库与示例数据
 ├── .gitignore
 └── docker-compose.yml
@@ -80,6 +83,26 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 滑动窗口事件时间计算
+
+`app/services/window_engine.py` 把窗口模板的宽度/滑动步长/对齐基准/时区落成
+真实计算规则，接口挂在 `/api/window-engine`（先于 `/{module}` 动态路由注册）：
+
+- 事件时间计算：带标识的历史事件按左闭右开 `[start, start+width)` 落入
+  滑动窗口，写出可回溯的覆盖分区（`POST /templates/{id}/compute`，
+  `GET /templates/{id}/partitions`、`GET /events/{id}/attribution` 回查归属）。
+- 幂等接入：同一事件并发重放只累计一次接入量，凭据唯一
+  （`POST /events`、`POST /events/{id}/replay`）。
+- 补算结算：按覆盖分区实际计算窗口特征值并交付，批次记录已交付金额、
+  关联分区与尚待另一窗提供的重叠范围（`POST /templates/{id}/windows/{key}/settle`）。
+- 对账：各窗口结算合计与重叠事件的唯一接入凭据核对（`GET /reconcile`）。
+
+演示场景（种子即此状态）：宽 4h / 步长 2h / 00:00 对齐 / Asia/Shanghai。
+后窗 `[02:00,06:00)` 已补算 10 元（05:00 事件 3 元 + 重叠区迟到的 E7 7 元），
+前窗 `[00:00,04:00)` 待执行（BACK-0005，启动回溯即重传 E7 并结算 7 元）；
+04:00 事件因右开边界不进前窗，与 E7 分别计量。
+运行测试：`cd backend && .venv/bin/python -m unittest discover -s tests`。
 
 领域：数据工程
 子方向：数仓与数据湖
